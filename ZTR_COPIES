@@ -1,0 +1,349 @@
+*&---------------------------------------------------------------------*
+*& Report ZSHREE
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZSHREE.
+
+DATA: GS_E070   TYPE E070,
+      GS_E07T   TYPE E07T,
+      GT_E070   TYPE TABLE OF E070,
+      GS_E070_2 TYPE E070,
+      GF_ERROR,
+      GF_TRKORR TYPE E070-TRKORR,
+      GF_TEXT   TYPE TEXT132.
+
+*----------------------------------------------------------------------------------
+*  Selection
+*----------------------------------------------------------------------------------
+SELECTION-SCREEN BEGIN OF BLOCK B1 WITH FRAME TITLE TEXT-001.
+PARAMETERS P_TRKORR LIKE E070-TRKORR OBLIGATORY.
+SELECTION-SCREEN: END OF BLOCK B1,
+                  BEGIN OF BLOCK B2 WITH FRAME TITLE TEXT-002.
+PARAMETERS: P_TARSYS LIKE E070-TARSYSTEM OBLIGATORY DEFAULT 'SUQ',
+            P_CLTSRC LIKE E070C-CLIENT OBLIGATORY DEFAULT SY-MANDT.
+SELECTION-SCREEN END OF BLOCK B2.
+
+AT SELECTION-SCREEN OUTPUT.
+  LOOP AT SCREEN.
+    IF SCREEN-NAME CP 'P_TARSYS'.
+      SCREEN-INPUT = 0.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+
+AT SELECTION-SCREEN.
+  SELECT SINGLE * FROM E070 INTO GS_E070 WHERE TRKORR = P_TRKORR.
+  IF SY-SUBRC <> 0.
+    MESSAGE E880(TK) WITH P_TRKORR.
+  ELSEIF GS_E070-TRFUNCTION NA 'KWS'
+      OR GS_E070-TRSTATUS NE 'D'.
+    MESSAGE E715(TK).
+  ENDIF.
+  CLEAR GS_E070.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_TRKORR.
+  CALL FUNCTION 'TR_F4_REQUESTS'
+    EXPORTING
+      IV_USERNAME         = SY-UNAME
+      IV_TRFUNCTIONS      = 'KWTR' "Workbench and Customizing
+      IV_TRSTATUS         = 'D'    "Changeable
+    IMPORTING
+      EV_SELECTED_REQUEST = P_TRKORR.
+
+*----------------------------------------------------------------------------------
+*  Processing
+*----------------------------------------------------------------------------------
+START-OF-SELECTION.
+
+  PERFORM AUTH.
+  PERFORM MAIN.
+
+*&---------------------------------------------------------------------*
+*&      Form  AUTH
+*&---------------------------------------------------------------------*
+*       Authorization Check
+*----------------------------------------------------------------------*
+FORM AUTH .
+
+  AUTHORITY-CHECK OBJECT 'S_SYS_RWBO'
+           ID 'DOMAIN' FIELD 'DOMAIN_SUD'
+           ID 'DESTSYS' FIELD 'SUD'
+           ID 'TTYPE' FIELD 'TRAN'
+           ID 'ACTVT' FIELD '43'.
+  IF SY-SUBRC <> 0.
+    MESSAGE 'No authorization' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  AUTH
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM MAIN .
+
+*  Build the new Text
+  DATA LF_ASTEXT TYPE E07T-AS4TEXT.
+
+  SELECT SINGLE * FROM E07T INTO GS_E07T WHERE TRKORR = P_TRKORR.
+  CONCATENATE 'TRK' P_TRKORR ':' GS_E07T-AS4TEXT INTO LF_ASTEXT SEPARATED BY SPACE.
+  WRITE: /, 'Kurztext TR: ' , LF_ASTEXT.
+
+*  Create Order
+  CALL FUNCTION 'TR_INSERT_NEW_COMM'
+    EXPORTING
+      WI_KURZTEXT             = LF_ASTEXT
+      WI_TRFUNCTION           = 'T'
+*     WI_STRKORR              = ' '
+*     WI_CATEGORY             = ' '
+      IV_TARSYSTEM            = P_TARSYS
+      WI_CLIENT               = P_CLTSRC
+*     WI_TARGET_CLIENT        =
+*     IV_TARDEVCL             = ' '
+*     IV_DEVCLASS             = ' '
+*     IV_TARLAYER             = ' '
+*     WI_PROTECT              = ' '
+*     IV_SIMULATION           = ' '
+    IMPORTING
+      WE_TRKORR               = GF_TRKORR
+*     WE_E070                 =
+*     WE_E07T                 =
+*     WE_E070C                =
+*     ES_E070M                =
+    EXCEPTIONS
+      CLIENT_RANGE_FULL       = 1
+      E070L_INSERT_ERROR      = 2
+      E070L_UPDATE_ERROR      = 3
+      E070_INSERT_ERROR       = 4
+      E07T_INSERT_ERROR       = 5
+      E070C_INSERT_ERROR      = 6
+      E070M_INSERT_ERROR      = 7
+      NO_SYSTEMNAME           = 8
+      NO_SYSTEMTYPE           = 9
+      SAP_RANGE_FULL          = 10
+      UNALLOWED_TRFUNCTION    = 11
+      UNALLOWED_USER          = 12
+      ORDER_NOT_FOUND         = 13
+      INVALID_TARGETSYSTEM    = 14
+      INVALID_TARGET_DEVCLASS = 15
+      INVALID_DEVCLASS        = 16
+      INVALID_TARGET_LAYER    = 17
+      INVALID_STATUS          = 18
+      NOT_AN_ORDER            = 19
+      ORDER_LOCK_FAILED       = 20
+      NO_AUTHORIZATION        = 21
+      WRONG_CLIENT            = 22
+      FILE_ACCESS_ERROR       = 23
+      WRONG_CATEGORY          = 24
+      INTERNAL_ERROR          = 25
+      OTHERS                  = 26.
+  IF SY-SUBRC <> 0.
+    MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+          WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+
+  ELSE.
+
+*  Take elements from order
+    CALL FUNCTION 'TR_COPY_COMM'
+      EXPORTING
+*       WI_DIALOG                = 'X'
+        WI_TRKORR_FROM           = P_TRKORR
+        WI_TRKORR_TO             = GF_TRKORR
+        WI_WITHOUT_DOCUMENTATION = SPACE
+      EXCEPTIONS
+        DB_ACCESS_ERROR          = 1
+        TRKORR_FROM_NOT_EXIST    = 2
+        TRKORR_TO_IS_REPAIR      = 3
+        TRKORR_TO_LOCKED         = 4
+        TRKORR_TO_NOT_EXIST      = 5
+        TRKORR_TO_RELEASED       = 6
+        USER_NOT_OWNER           = 7
+        NO_AUTHORIZATION         = 8
+        WRONG_CLIENT             = 9
+        WRONG_CATEGORY           = 10
+        OBJECT_NOT_PATCHABLE     = 11
+        OTHERS                   = 12.
+    IF SY-SUBRC <> 0.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+            WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      MOVE 'X' TO GF_ERROR.
+    ELSE.
+    ENDIF.
+
+* Inherit items from subtasks
+    SELECT * FROM E070 INTO TABLE GT_E070 WHERE STRKORR = P_TRKORR.
+    IF SY-SUBRC = 0.
+      LOOP AT GT_E070 INTO GS_E070.
+        CALL FUNCTION 'TR_COPY_COMM'
+          EXPORTING
+*           WI_DIALOG                = 'X'
+            WI_TRKORR_FROM           = GS_E070-TRKORR
+            WI_TRKORR_TO             = GF_TRKORR
+            WI_WITHOUT_DOCUMENTATION = SPACE
+          EXCEPTIONS
+            DB_ACCESS_ERROR          = 1
+            TRKORR_FROM_NOT_EXIST    = 2
+            TRKORR_TO_IS_REPAIR      = 3
+            TRKORR_TO_LOCKED         = 4
+            TRKORR_TO_NOT_EXIST      = 5
+            TRKORR_TO_RELEASED       = 6
+            USER_NOT_OWNER           = 7
+            NO_AUTHORIZATION         = 8
+            WRONG_CLIENT             = 9
+            WRONG_CATEGORY           = 10
+            OBJECT_NOT_PATCHABLE     = 11
+            OTHERS                   = 12.
+        IF SY-SUBRC <> 0.
+          MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+              WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+          MOVE 'X' TO GF_ERROR.
+        ELSE.
+        ENDIF.
+        SELECT * FROM E070 INTO GS_E070_2 WHERE STRKORR = GS_E070-TRKORR.
+          APPEND GS_E070_2 TO GT_E070.
+        ENDSELECT.
+        CLEAR GS_E070_2.
+        CLEAR GS_E070.
+      ENDLOOP.
+    ENDIF.
+
+*  Release order
+    SELECT * FROM E070 INTO TABLE GT_E070 WHERE TRKORR = P_TRKORR.
+    IF SY-SUBRC <> 0.
+      WRITE: / , 'Order not found'.
+    ELSEIF GF_ERROR IS INITIAL.
+      CALL FUNCTION 'TR_RELEASE_REQUEST'
+        EXPORTING
+          IV_TRKORR                  = GF_TRKORR
+*         IV_DIALOG                  = 'X'
+*         IV_AS_BACKGROUND_JOB       = ''
+*         IV_SUCCESS_MESSAGE         = 'X'
+          IV_DISPLAY_EXPORT_LOG      = SPACE
+*       IMPORTING
+*         ES_REQUEST                 =
+*         ET_DELETED_TASKS           =
+        EXCEPTIONS
+          CTS_INITIALIZATION_FAILURE = 1
+          ENQUEUE_FAILED             = 2
+          NO_AUTHORIZATION           = 3
+          INVALID_REQUEST            = 4
+          REQUEST_ALREADY_RELEASED   = 5
+          REPEAT_TOO_EARLY           = 6
+          OBJECT_CHECK_ERROR         = 7
+          DOCU_MISSING               = 8
+          DB_ACCESS_ERROR            = 9
+          ACTION_ABORTED_BY_USER     = 10
+          EXPORT_FAILED              = 11
+          OTHERS                     = 12.
+      IF SY-SUBRC <> 0.
+        MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+       WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ELSE.
+          CONCATENATE 'Request ' GF_TRKORR ' ( ' LF_ASTEXT ' ) with Target ' P_TARSYS 'released' INTO GF_TEXT SEPARATED BY ' '.
+          CONDENSE GF_TEXT.
+          WRITE: / , GF_TEXT.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+  ULINE.
+*  Automatic import
+  DATA LF_ANSWER TYPE C.
+  DATA LT_LOGPTR  TYPE TABLE OF TPLOGPTR.
+  DATA LT_STDOUT  TYPE TABLE OF TPSTDOUT.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+*       TITLEBAR       = ' '
+*       DIAGNOSE_OBJECT             = ' '
+        TEXT_QUESTION  = 'Automatic Import?'
+*       TEXT_BUTTON_1  = 'Ja'(001)
+*       ICON_BUTTON_1  = ' '
+*       TEXT_BUTTON_2  = 'Nein'(002)
+*       ICON_BUTTON_2  = ' '
+*       DEFAULT_BUTTON = '1'
+*       DISPLAY_CANCEL_BUTTON       = 'X'
+*       USERDEFINED_F1_HELP         = ' '
+*       START_COLUMN   = 25
+*       START_ROW      = 6
+*       POPUP_TYPE     =
+*       IV_QUICKINFO_BUTTON_1       = ' '
+*       IV_QUICKINFO_BUTTON_2       = ' '
+      IMPORTING
+        ANSWER         = LF_ANSWER
+*   TABLES
+*       PARAMETER      =
+      EXCEPTIONS
+        TEXT_NOT_FOUND = 1
+        OTHERS         = 2.
+  IF LF_ANSWER EQ 1.
+    DATA: LF_TARGET	LIKE TMSCSYS-SYSNAM                        ,
+          LF_TARCLI LIKE TMSBUFFER-TARCLI                      ,
+          L_ANSWER                                             ,
+          LT_REQUESTS TYPE TABLE OF CTS_REQ WITH HEADER LINE   .
+
+    DATA LS_DOMAIN TYPE TMSCSYS.
+    DATA LT_REQU   TYPE TABLE OF TMSBUFFER.
+
+    SELECT *
+      FROM TMSBUFFER
+      INTO CORRESPONDING FIELDS OF TABLE LT_REQU
+      WHERE TRKORR = GF_TRKORR.
+
+    SELECT SINGLE *
+      FROM TMSCSYS
+      INTO CORRESPONDING FIELDS OF LS_DOMAIN
+      WHERE SYSNAM = P_TARSYS.
+    IF SY-SUBRC <> 0.
+      SELECT SINGLE *
+        FROM TMSCSYS
+        INTO CORRESPONDING FIELDS OF LS_DOMAIN
+        WHERE SYSNAM = P_TARSYS+0(3).
+    ENDIF.
+
+    CALL FUNCTION 'TMS_UI_IMPORT_TR_REQUEST'
+      EXPORTING
+        IV_SYSTEM             = LS_DOMAIN-SYSNAM
+        IV_DOMAIN             = LS_DOMAIN-DOMNAM
+        IV_REQUEST            = GF_TRKORR
+*       iv_tarcli             = lf_tarcli
+*       IV_SYSTXT             =
+*       IV_REQTXT             =
+*       IV_CTC_ACTIVE         =
+*       IV_SOME_ACTIVE        = 'X'
+*       IV_VERBOSE            =
+*       IV_EXPERT_MODE        =
+        IV_CHECK_STRATEGY     = 'X'
+*       it_requests           = lt_requ
+*       IT_CLIENTS            =
+*       IT_ALL_REQUESTS       =
+      EXCEPTIONS
+        CANCELLED_BY_USER     = 1
+        IMPORT_REQUEST_DENIED = 2
+        IMPORT_REQUEST_FAILED = 3
+        OTHERS                = 4.
+
+  CASE SY-SUBRC.
+    WHEN 0.
+    WHEN 1.
+      EXIT.
+    WHEN OTHERS.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+              WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDCASE.
+
+    IF SY-SUBRC NE 0.
+      CALL FUNCTION 'TMS_UI_IMPORT_QUEUE_DISPLAY'
+        EXPORTING
+          IV_SYSTEM                   = LS_DOMAIN-SYSNAM
+        EXCEPTIONS
+          IMPORT_QUEUE_DISPLAY_FAILED = 1
+          OTHERS                      = 2.
+      IF SY-SUBRC <> 0.
+      ENDIF.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+       WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.
