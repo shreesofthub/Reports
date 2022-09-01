@@ -1,0 +1,292 @@
+*&---------------------------------------------------------------------*
+*& Report ZSHREE1
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZSHREE1.
+DATA: GV_GJAHR       TYPE GJAHR,
+      GT_HFINAL      TYPE ZFI_TT_IRS_HEADER,
+      GT_IFINAL      TYPE ZFI_TT_IRS_item,
+      GV_PAYEE_NAME1 TYPE AD_NAME1,
+      GV_PAVAL       TYPE T001Z-PAVAL.
+SELECTION-SCREEN BEGIN OF BLOCK B1 WITH FRAME TITLE TEXT-T01.
+  PARAMETERS: P_BUKRS TYPE BUKRS OBLIGATORY .
+  SELECT-OPTIONS: S_GJAHR FOR GV_GJAHR NO-EXTENSION NO INTERVALS.
+  PARAMETERS: R_ALV RADIOBUTTON GROUP RG1 DEFAULT 'X',
+              R_FORM RADIOBUTTON GROUP RG1.
+SELECTION-SCREEN END OF BLOCK B1.
+
+*** Selection screen validation.
+AT SELECTION-SCREEN ON P_BUKRS.
+  PERFORM SS_VALIDATION.
+*** Get the data from DB.
+START-OF-SELECTION.
+  PERFORM GET_DATA.
+
+END-OF-SELECTION.
+  IF GT_HFINAL IS NOT INITIAL.
+*** ALV Display.
+    IF R_ALV IS NOT INITIAL.
+      PERFORM ALV_Display.
+    ELSE.
+*** call the Smartform form.
+      PERFORM CALL_FORM.
+    ENDIF.
+  ENDIF.
+
+FORM GET_DATA .
+  DATA: RT_BELNR TYPE RANGE OF BELNR_D,
+        RS_BELNR LIKE LINE OF RT_BELNR.
+  SELECT BUKRS,
+         BELNR,
+         GJAHR,
+         BUDAT FROM BKPF INTO TABLE @DATA(LT_BKPF)
+                              WHERE BUKRS =  @P_BUKRS AND
+                                    GJAHR IN  @S_GJAHR.
+*                                    budat IN @s_budat.
+  IF LT_BKPF IS NOT INITIAL.
+    SELECT SINGLE * FROM T001Z INTO @DATA(LS_T001Z)
+                               WHERE BUKRS = @P_BUKRS AND
+                                     PARTY = 'SAPTIN'.
+    IF SY-SUBRC = 0.
+      GV_PAVAL = LS_T001Z-PAVAL.
+    ENDIF.
+    SELECT BUKRS     ,
+           BELNR     ,
+           GJAHR     ,
+           BUZEI     ,
+           WITHT     ,
+           WT_WITHCD ,
+           WT_QSSHH  ,
+           WT_BASMAN ,
+           WT_WTEXMN ,
+           KOART     ,
+           WT_ACCO   ,
+           AUGBL     ,
+           AUGDT     ,
+           WT_WDMBTR FROM WITH_ITEM INTO TABLE @DATA(LT_WITH_ITEM)
+                     FOR ALL ENTRIES IN @LT_BKPF WHERE BUKRS  = @LT_BKPF-BUKRS AND
+                                                       BELNR  = @LT_BKPF-BELNR AND
+                                                       GJAHR  = @LT_BKPF-GJAHR AND
+                                                       AUGBL NE ''.
+    IF LT_WITH_ITEM IS NOT INITIAL  .
+      DATA(LTD_WITH_ITEM) = LT_WITH_ITEM.
+*      ltd_with_item = lt_with_item.
+*      delete lt_with_item WHERE belnr in ltd_with_item-augbl.
+      SORT LTD_WITH_ITEM BY WT_ACCO.
+      DELETE ADJACENT DUPLICATES FROM LTD_WITH_ITEM COMPARING WT_ACCO.
+      SELECT LIFNR  ,
+             NAME1  ,
+             ORT01  ,
+             PSTLZ  ,
+             REGIO  ,
+             STRAS  FROM LFA1 INTO TABLE @DATA(LT_LFA1)
+                    FOR ALL ENTRIES IN @LTD_WITH_ITEM
+                    WHERE LIFNR = @LTD_WITH_ITEM-WT_ACCO.
+      IF LT_LFA1 IS NOT INITIAL.
+        SELECT LIFNR     ,
+               BUKRS     ,
+               WITHT     ,
+               WT_SUBJCT ,
+               QSREC     ,
+               WT_WTSTCD FROM LFBW INTO TABLE @DATA(LT_LFBW)
+                         FOR ALL ENTRIES IN @LT_LFA1
+                         WHERE LIFNR = @LT_LFA1-LIFNR AND
+                               BUKRS = @P_BUKRS.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+  IF LT_WITH_ITEM IS NOT INITIAL.
+    DATA: LS_LFA1 LIKE LINE OF LT_LFA1,
+          LV_NO   TYPE INT4.
+    SORT LT_WITH_ITEM BY WT_ACCO.
+    LOOP AT LT_WITH_ITEM INTO DATA(LS_WITH_ITEM).
+      IF LS_WITH_ITEM-BELNR EQ LS_WITH_ITEM-AUGBL.
+        RS_BELNR-SIGN = 'I'.
+        RS_BELNR-OPTION = 'EQ'.
+        RS_BELNR-LOW = LS_WITH_ITEM-BELNR.
+        APPEND RS_BELNR TO RT_BELNR.
+        CLEAR: RS_BELNR.
+      ENDIF.
+      DATA(LS_IFINAL) = CORRESPONDING ZFI_s_IRS_item( LS_WITH_ITEM ).
+      IF LINE_EXISTS( LT_BKPF[ BUKRS =  LS_WITH_ITEM-BUKRS
+                               BELNR =  LS_WITH_ITEM-BELNR
+                               GJAHR =  LS_WITH_ITEM-GJAHR ] ).
+        LS_IFINAL-BUDAT = LT_BKPF[ BUKRS =  LS_WITH_ITEM-BUKRS
+                                   BELNR =  LS_WITH_ITEM-BELNR
+                                   GJAHR =  LS_WITH_ITEM-GJAHR ]-BUDAT.
+        IF LS_WITH_ITEM-BELNR NE LS_WITH_ITEM-AUGBL.
+          LV_NO = LV_NO + 1.
+          LS_IFINAL-SNO = LV_NO.
+        ENDIF.
+        APPEND LS_IFINAL TO GT_IFINAL.
+        CLEAR: LS_IFINAL.
+      ENDIF.
+      IF LS_WITH_ITEM-WT_ACCO NE LS_LFA1-LIFNR.
+        READ TABLE LT_LFA1 INTO LS_LFA1 WITH KEY LIFNR = LS_WITH_ITEM-WT_ACCO.
+        IF SY-SUBRC = 0.
+          DATA(LS_HFINAL) = CORRESPONDING ZFI_ss_IRS_HEADER( LS_LFA1 ) .
+          LS_HFINAL-KOART = LS_WITH_ITEM-KOART.
+          LS_HFINAL-GJAHR = LS_WITH_ITEM-GJAHR.
+          READ TABLE LT_LFBW INTO DATA(LS_LFBW) WITH KEY LIFNR = LS_LFA1-LIFNR
+                                                         BUKRS = LS_WITH_ITEM-BUKRS.
+          IF SY-SUBRC = 0.
+            LS_HFINAL-WT_SUBJCT = LS_LFBW-WT_SUBJCT.
+            LS_HFINAL-QSREC     = LS_LFBW-QSREC    .
+            LS_HFINAL-WT_WTSTCD = LS_LFBW-WT_WTSTCD.
+          ENDIF.
+        ENDIF.
+        LS_HFINAL-PAYER_TIN  = LS_T001Z-PAVAL.
+        LS_HFINAL-PAYER_NAME = GV_PAYEE_NAME1.
+        APPEND LS_HFINAL TO GT_HFINAL.
+        CLEAR: LS_HFINAL.
+      ENDIF.
+    ENDLOOP.
+    CLEAR: LV_NO.
+  ENDIF.
+  DELETE GT_IFINAL WHERE BELNR IN RT_BELNR.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form ss_validation
+*&---------------------------------------------------------------------*
+*& Selection screen field - P_bukrs validation
+*&---------------------------------------------------------------------*
+FORM SS_VALIDATION .
+  SELECT SINGLE BUKRS,
+                BUTXT,
+                ADRNR FROM T001 INTO @DATA(ls_T001) WHERE BUKRS = @P_BUKRS.
+  IF SY-SUBRC NE 0.
+    MESSAGE E300(ZFI_SSF) WITH 'Invalid Company code' .
+  ELSE.
+    SELECT SINGLE * FROM ADRC INTO @DATA(LS_ADRC) WHERE ADDRNUMBER  = @ls_T001-ADRNR.
+    IF SY-SUBRC = 0.
+      GV_PAYEE_NAME1 = LS_ADRC-NAME1.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form call_form
+*&---------------------------------------------------------------------*
+*& To call the Adobe form
+*&---------------------------------------------------------------------*
+FORM CALL_FORM .
+  DATA: lV_formname TYPE TDSFNAME VALUE 'ZSF_FI_IRS',
+        lV_fm_name  TYPE RS38L_FNAM.
+  IF GT_HFINAL IS NOT INITIAL AND GT_IFINAL IS NOT INITIAL .
+    SORT: GT_HFINAL BY LIFNR DESCENDING,
+          GT_IFINAL BY WT_ACCO DESCENDING.
+    CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
+      EXPORTING
+        FORMNAME           = LV_FORMNAME
+      IMPORTING
+        FM_NAME            = lV_fm_name
+      EXCEPTIONS
+        NO_FORM            = 1
+        NO_FUNCTION_MODULE = 2
+        OTHERS             = 3.
+    IF lV_fm_name IS NOT INITIAL.
+      CALL FUNCTION LV_FM_NAME      "'/1BCDWB/SF00000082'
+        TABLES
+          IT_ITEMS         = GT_IFINAL
+          IT_HEADER        = GT_HFINAL
+        EXCEPTIONS
+          FORMATTING_ERROR = 1
+          INTERNAL_ERROR   = 2
+          SEND_ERROR       = 3
+          USER_CANCELED    = 4
+          OTHERS           = 5.
+      IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+      ENDIF.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form ALV_Display
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+FORM ALV_Display .
+  DATA(IT_FCAT) = VALUE SLIS_T_FIELDCAT_ALV(
+                  ( FIELDNAME = 'GJAHR'       SELTEXT_M = 'FY' )
+                  ( FIELDNAME = 'LIFNR'      SELTEXT_M = 'BP Number' )
+                  ( FIELDNAME = 'NAME1'      SELTEXT_M = 'Recipient Name' )
+                  ( FIELDNAME = 'WT_WTSTCD'  SELTEXT_M = 'Recipient TIN' )
+                  ( FIELDNAME = 'WT_SUBJCT'  SELTEXT_M = 'Subject to with TAX' )
+                  ( FIELDNAME = 'QSREC'      SELTEXT_M = 'Recipient Type' )
+                  ( FIELDNAME = 'STRAS'      SELTEXT_M = 'Address Ln1' )
+                  ( FIELDNAME = 'ORT01'      SELTEXT_M = 'City' )
+                  ( FIELDNAME = 'REGIO'      SELTEXT_M = 'State' )
+                  ( FIELDNAME = 'PSTLZ'      SELTEXT_M = 'Zip code' )
+                  ( FIELDNAME = 'KOART'      SELTEXT_M = 'Recipient Type Vendor or customer') ).
+  IF IT_FCAT IS NOT INITIAL.
+    DATA(LS_LAY) = VALUE SLIS_LAYOUT_ALV( COLWIDTH_OPTIMIZE = 'X' ).
+    CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+      EXPORTING
+        IS_LAYOUT               = LS_LAY
+        IT_FIELDCAT             = IT_FCAT
+        I_CALLBACK_PROGRAM      = SY-REPID
+        I_CALLBACK_USER_COMMAND = 'USER_COMMAND'
+        I_CALLBACK_TOP_OF_PAGE  = 'TOP_OF_PAGE'
+      TABLES
+        T_OUTTAB                = GT_HFINAL
+      EXCEPTIONS
+        PROGRAM_ERROR           = 1
+        OTHERS                  = 2.
+    IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+    ENDIF.
+  ENDIF.
+ENDFORM.
+FORM TOP_OF_PAGE.
+  DATA(IT_LISTHEADER) = VALUE SLIS_T_LISTHEADER(
+                        ( TYP  = 'H'
+                          INFO = 'IRS Data on Payments to Vendors in a year' )
+                        ( TYP = 'S'
+                          KEY = 'Payer Name :'
+                          INFO = GV_PAYEE_NAME1 )
+                        ( TYP = 'S'
+                          KEY = 'Payer TIN :'
+                          INFO = GV_PAVAL )
+  ).
+  CALL FUNCTION 'REUSE_ALV_COMMENTARY_WRITE'
+    EXPORTING
+      IT_LIST_COMMENTARY = IT_LISTHEADER.
+ENDFORM.
+FORM USER_COMMAND USING UCOMM TYPE SY-UCOMM
+                        SELFIELD TYPE SLIS_SELFIELD.
+  IF UCOMM = '&IC1'.
+    DATA(LS_HFINAL) = GT_HFINAL[ SELFIELD-TABINDEX ].
+    DATA(DIT_IFINAL) = GT_IFINAL.
+    DELETE DIT_IFINAL WHERE WT_ACCO NE LS_HFINAL-LIFNR.
+    IF DIT_IFINAL IS NOT INITIAL.
+      DATA(IT_FCAT) = VALUE SLIS_T_FIELDCAT_ALV(
+                ( FIELDNAME = 'SNO'         SELTEXT_M = 'Sno')
+                ( FIELDNAME = 'AUGBL'       SELTEXT_M = 'Clearing Doc No' )
+                ( FIELDNAME = 'AUGDT'       SELTEXT_M = 'Clearing date' )
+                ( FIELDNAME = 'BELNR'       SELTEXT_M = 'Inv Document' )
+                ( FIELDNAME = 'BUDAT'       SELTEXT_M = 'Inv. Document Posting Date' )
+                ( FIELDNAME = 'WT_QSSHH'    SELTEXT_M = 'W/Tax Base Amnt in LC (USD)'  DO_SUM = 'X')
+                ( FIELDNAME = 'WT_BASMAN'   SELTEXT_M = 'Applied Manually (X)' )
+                ( FIELDNAME = 'WITHT'       seltext_L = 'Fed Witholding tax Type' )
+                ( FIELDNAME = 'WT_WITHCD'   SELTEXT_M = 'Fed With Tax code' )
+                ( FIELDNAME = 'WT_WDMBTR'   seltext_L = 'WTax Amount Already Withheld in LC' )
+                ( FIELDNAME = 'WT_WTEXMN'   SELTEXT_M = 'Exemption Cert Number' ) ).
+      IF IT_FCAT IS NOT INITIAL.
+        DATA(LS_LAY) = VALUE SLIS_LAYOUT_ALV( COLWIDTH_OPTIMIZE = 'X' ).
+        CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+          EXPORTING
+            IS_LAYOUT     = LS_LAY
+            IT_FIELDCAT   = IT_FCAT
+          TABLES
+            T_OUTTAB      = DIT_IFINAL
+          EXCEPTIONS
+            PROGRAM_ERROR = 1
+            OTHERS        = 2.
+        IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+ENDFORM.
