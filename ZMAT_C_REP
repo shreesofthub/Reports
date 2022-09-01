@@ -1,0 +1,261 @@
+*&---------------------------------------------------------------------*
+*& Report ZSHREE1
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZSHREE1.
+*** Local structures declaration.
+TYPES: BEGIN OF TY_FINAL,
+         MBLNR   TYPE MBLNR,
+         ZEILE   TYPE MBLPO,
+         MATNR   TYPE MATNR,
+         MTART   TYPE MTART,
+         MATKL   TYPE MATKL,
+         BWART   TYPE BWART,
+         WERKS   TYPE WERKS_D,
+         LGORT   TYPE LGORT_D,
+         CHARG   TYPE CHARG_D,
+         DMBTR   TYPE DMBTR,
+         MENGE   TYPE MENGE_D,
+         MEINS   TYPE MEINS,
+         SGTXT   TYPE SGTXT,
+         KOSTL   TYPE KOSTL,
+         AUFNR   TYPE AUFNR,
+         BELNR   TYPE BELNR_D,
+         RSNUM   TYPE RSNUM,
+         RSPOS   TYPE RSPOS,
+         WEMPF   TYPE WEMPF,
+         SGTXT_R TYPE SGTXT,
+         SAKTO   TYPE SAKNR,
+         BUDAT   TYPE BUDAT,
+         CPUDT   TYPE CPUDT,
+         USNAM   TYPE USNAM,
+       END OF TY_FINAL.
+*** Data declaration.
+DATA: GV_MATNR TYPE MATNR,
+      GV_MTART TYPE MTART,
+      GV_BWART TYPE BWART,
+      GV_BUDAT TYPE UDAT,
+      GT_FINAL TYPE STANDARD TABLE OF TY_FINAL INITIAL SIZE 1.
+
+*** Selection Screen Design.
+SELECTION-SCREEN BEGIN OF BLOCK B1 WITH FRAME TITLE TEXT-T01.
+SELECT-OPTIONS: S_MATNR FOR GV_MATNR,
+                S_MTART FOR GV_MTART,
+                S_BWART FOR GV_BWART,
+                S_BUDAT FOR GV_BUDAT.
+SELECTION-SCREEN END OF BLOCK B1.
+*** Selection screen Validation.
+AT SELECTION-SCREEN.
+  PERFORM VALIDATION.
+*** Fetching data from Database and final
+*** table preparation
+START-OF-SELECTION.
+  PERFORM GET_DATA.
+
+END-OF-SELECTION.
+*** ALV display.
+  IF GT_FINAL IS NOT INITIAL.
+    PERFORM ALV_DISPLAY.
+  ENDIF.
+FORM VALIDATION .
+  SELECT SINGLE MATNR FROM MARA INTO @GV_MATNR WHERE MATNR IN @S_MATNR.
+  IF SY-SUBRC NE 0.
+    MESSAGE 'Given Material Number is Invalid' TYPE 'E'.
+  ELSE.
+    SELECT SINGLE MTART FROM T134 INTO @DATA(LV_MTART) WHERE MTART IN @S_MTART.
+    IF SY-SUBRC NE 0.
+      MESSAGE 'Given Material Type is Invalid' TYPE 'E'.
+    ELSE.
+      SELECT SINGLE BWART FROM T156 INTO @GV_BWART WHERE BWART IN @S_BWART.
+      IF SY-SUBRC NE 0.
+        MESSAGE 'Given Movement type is invalid' TYPE 'E'.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  GET_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM GET_DATA .
+  SELECT MATNR,
+         MTART,
+         MATKL FROM MARA INTO TABLE @DATA(IT_MARA)
+                                    WHERE MATNR IN @S_MATNR AND
+                                          MTART IN @S_MTART.
+  IF SY-SUBRC = 0.
+    SELECT MBLNR ,
+           MJAHR ,
+           ZEILE ,
+           MATNR ,
+           BWART,
+           WERKS ,
+           LGORT ,
+           CHARG ,
+           DMBTR ,
+           MENGE ,
+           MEINS ,
+           SGTXT ,
+           KOSTL ,
+           AUFNR ,
+           BELNR ,
+           RSNUM ,
+           RSPOS ,
+           SAKTO  FROM MSEG INTO TABLE @DATA(IT_MSEG)
+                            FOR ALL ENTRIES IN @IT_MARA
+                            WHERE BWART IN @S_BWART AND
+                                  MATNR = @IT_MARA-MATNR.
+    IF IT_MSEG IS NOT INITIAL.
+      DATA(DIT_MSEG) = IT_MSEG.
+      SORT DIT_MSEG BY RSNUM.
+      DELETE ADJACENT DUPLICATES FROM DIT_MSEG COMPARING RSNUM.
+      SELECT RSNUM,
+             WEMPF FROM RKPF INTO TABLE @DATA(IT_RKPF)
+                             FOR ALL ENTRIES IN @DIT_MSEG
+                             WHERE RSNUM = @DIT_MSEG-RSNUM.
+      DATA(DIT_MSEG1) = IT_MSEG.
+      SORT DIT_MSEG1 BY RSNUM RSPOS .
+      DELETE ADJACENT DUPLICATES FROM DIT_MSEG1 COMPARING RSNUM RSPOS.
+      SELECT RSNUM,
+             RSPOS,
+             RSART,
+             SGTXT FROM RESB INTO TABLE @DATA(IT_RESB)
+                             FOR ALL ENTRIES IN @DIT_MSEG1
+                             WHERE RSNUM = @DIT_MSEG1-RSNUM AND
+                                   RSPOS = @DIT_MSEG1-RSPOS.
+      SELECT MBLNR,
+             MJAHR,
+             BUDAT,
+             CPUDT,
+             USNAM FROM MKPF INTO TABLE @DATA(IT_MKPF)
+                              FOR ALL ENTRIES IN @IT_MSEG
+                              WHERE MBLNR = @IT_MSEG-MBLNR AND
+                                    MJAHR = @IT_MSEG-MJAHR AND
+                                    BUDAT IN @S_BUDAT.
+      IF IT_MKPF IS  NOT INITIAL.
+        SORT IT_MKPF BY MBLNR MJAHR.
+      ENDIF.
+    ELSE.
+      MESSAGE 'No Data exist for given combination' TYPE 'I'.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+  ELSE.
+    MESSAGE 'No Data exist for given combination' TYPE 'I'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+  IF IT_MSEG IS NOT INITIAL.
+    LOOP AT IT_MSEG INTO DATA(LS_MSEG).
+**Move Corresponding
+      DATA(LS_FINAL) = CORRESPONDING TY_FINAL( LS_MSEG ).
+**Read Table with transporting No-fields for Record Existance check.
+      IF LINE_EXISTS( IT_MARA[ MATNR = LS_MSEG-MATNR ] ).
+**Reading It_mara table and move to ls_final.
+        LS_FINAL-MTART = IT_MARA[ MATNR = LS_MSEG-MATNR ]-MTART.
+        LS_FINAL-MATKL = IT_MARA[ MATNR = LS_MSEG-MATNR ]-MATKL.
+      ENDIF.
+**Read Table with transporting No-fields for Record Existance check.
+      IF LINE_EXISTS( IT_MKPF[ MBLNR = LS_MSEG-MBLNR MJAHR = LS_MSEG-MJAHR ] ).
+**Reading It_mkpf table and move-corresponding fields to ls_final.
+        LS_FINAL-BUDAT = IT_MKPF[ MBLNR = LS_MSEG-MBLNR MJAHR = LS_MSEG-MJAHR ]-BUDAT.
+        LS_FINAL-CPUDT = IT_MKPF[ MBLNR = LS_MSEG-MBLNR MJAHR = LS_MSEG-MJAHR ]-CPUDT.
+        LS_FINAL-USNAM = IT_MKPF[ MBLNR = LS_MSEG-MBLNR MJAHR = LS_MSEG-MJAHR ]-USNAM.
+      ENDIF.
+      IF LINE_EXISTS( IT_RKPF[ RSNUM = LS_MSEG-RSNUM ] ).
+        LS_FINAL-WEMPF = IT_RKPF[ RSNUM = LS_MSEG-RSNUM ]-WEMPF.
+      ENDIF.
+      IF LINE_EXISTS( IT_RESB[ RSNUM = LS_MSEG-RSNUM RSPOS = LS_MSEG-RSPOS ] ).
+        LS_FINAL-SGTXT_R = IT_RESB[ RSNUM = LS_MSEG-RSNUM RSPOS = LS_MSEG-RSPOS ]-SGTXT.
+      ENDIF.
+      APPEND LS_FINAL TO GT_FINAL.
+      CLEAR: LS_FINAL,LS_MSEG.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  ALV_DISPLAY
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM ALV_DISPLAY .
+  DATA(IT_FCAT) = VALUE SLIS_T_FIELDCAT_ALV(
+                  ( FIELDNAME = 'MBLNR' SELTEXT_M = 'Material_Document' )
+                  ( FIELDNAME = 'ZEILE' SELTEXT_M = 'Item No' )
+                  ( FIELDNAME = 'MATNR' SELTEXT_M = 'Material' )
+                  ( FIELDNAME = 'MTART' SELTEXT_M = 'Material Type' )
+                  ( FIELDNAME = 'MATKL' SELTEXT_M = 'Material Group' )
+                  ( FIELDNAME = 'BWART' SELTEXT_M = 'Movement Type' )
+                  ( FIELDNAME = 'WERKS' SELTEXT_M = 'Plant' )
+                  ( FIELDNAME = 'LGORT' SELTEXT_M = 'Storage Location' )
+                  ( FIELDNAME = 'CHARG' SELTEXT_M = 'Batch No' )
+                  ( FIELDNAME = 'DMBTR' SELTEXT_M = 'Amount in LC' )
+                  ( FIELDNAME = 'MENGE' SELTEXT_M = 'Qty' )
+                  ( FIELDNAME = 'MEINS' SELTEXT_M = 'UOM' )
+                  ( FIELDNAME = 'SGTXT' SELTEXT_M = 'Item Text' )
+                  ( FIELDNAME = 'KOSTL' SELTEXT_M = 'Cost Center' )
+                  ( FIELDNAME = 'AUFNR' SELTEXT_M = 'Order No' )
+                  ( FIELDNAME = 'BELNR' SELTEXT_M = 'Accounting Document' )
+                  ( FIELDNAME = 'RSNUM' SELTEXT_M = 'No.of Reservation' )
+                  ( FIELDNAME = 'RSPOS' SELTEXT_L = 'Item No. of Reservation' )
+                  ( FIELDNAME = 'WEMPF' SELTEXT_M = 'Goods Recipient' )
+                  ( FIELDNAME = 'SGTXT_R' SELTEXT_M = 'Text' )
+                  ( FIELDNAME = 'SAKTO' SELTEXT_M = 'G/L No.' )
+                  ( FIELDNAME = 'BUDAT' SELTEXT_M = 'Posting Date' )
+*                  ( FIELDNAME = 'CPUDT' SELTEXT_L = 'Day on which Account Doc Entered' )
+                  ( FIELDNAME = 'USNAM' SELTEXT_M = 'User Name' )
+                  ).
+  DATA(LS_LAY) = VALUE SLIS_LAYOUT_ALV( COLWIDTH_OPTIMIZE = 'X' ).
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+*     I_INTERFACE_CHECK                 = ' '
+*     I_BYPASSING_BUFFER                = ' '
+*     I_BUFFER_ACTIVE                   = ' '
+*     I_CALLBACK_PROGRAM                = ' '
+*     I_CALLBACK_PF_STATUS_SET          = ' '
+*     I_CALLBACK_USER_COMMAND           = ' '
+*     I_CALLBACK_TOP_OF_PAGE            = ' '
+*     I_CALLBACK_HTML_TOP_OF_PAGE       = ' '
+*     I_CALLBACK_HTML_END_OF_LIST       = ' '
+*     I_STRUCTURE_NAME                  =
+*     I_BACKGROUND_ID                   = ' '
+*     I_GRID_TITLE  =
+*     I_GRID_SETTINGS                   =
+      IS_LAYOUT     = LS_LAY
+      IT_FIELDCAT   = IT_FCAT
+*     IT_EXCLUDING  =
+*     IT_SPECIAL_GROUPS                 =
+*     IT_SORT       =
+*     IT_FILTER     =
+*     IS_SEL_HIDE   =
+*     I_DEFAULT     = 'X'
+*     I_SAVE        = ' '
+*     IS_VARIANT    =
+*     IT_EVENTS     =
+*     IT_EVENT_EXIT =
+*     IS_PRINT      =
+*     IS_REPREP_ID  =
+*     I_SCREEN_START_COLUMN             = 0
+*     I_SCREEN_START_LINE               = 0
+*     I_SCREEN_END_COLUMN               = 0
+*     I_SCREEN_END_LINE                 = 0
+*     I_HTML_HEIGHT_TOP                 = 0
+*     I_HTML_HEIGHT_END                 = 0
+*     IT_ALV_GRAPHICS                   =
+*     IT_HYPERLINK  =
+*     IT_ADD_FIELDCAT                   =
+*     IT_EXCEPT_QINFO                   =
+*     IR_SALV_FULLSCREEN_ADAPTER        =
+* IMPORTING
+*     E_EXIT_CAUSED_BY_CALLER           =
+*     ES_EXIT_CAUSED_BY_USER            =
+    TABLES
+      T_OUTTAB      = GT_FINAL
+    EXCEPTIONS
+      PROGRAM_ERROR = 1
+      OTHERS        = 2.
+  IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+ENDFORM.
